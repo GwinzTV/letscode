@@ -46,6 +46,11 @@ func (h *Handler) shorten(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
+	// validate URL: must parse, have host and https scheme
+if err := ValidateURL(req.URL); err != nil {
+    http.Error(w, err.Error(), http.StatusBadRequest)
+    return
+}
 	code := h.generateCode(6)
 	if err := h.store.Save(code, req.URL); err != nil {
 		log.Printf("save error: %v", err)
