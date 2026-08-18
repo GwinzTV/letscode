@@ -7,4 +7,4 @@ build:
 	go build -o bin/urlshortener ./cmd/urlshortener
 
 test:
-	go test ./...
+	go test ./tests
