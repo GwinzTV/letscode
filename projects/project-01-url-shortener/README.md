@@ -37,7 +37,7 @@ Notes:
 
 Remaining / High-priority work
 
-1) Input validation & URL normalization
+1) ~~Input validation & URL normalization~~
 - Validate request payloads (presence and JSON schema).
 - Normalize URLs: ensure scheme exists (add https:// when absent), parse using net/url, and reject inv§alid or disallowed schemes (e.g., file://).
 - Return clear 4xx errors with helpful messages for client mistakes.
@@ -45,8 +45,11 @@ Remaining / High-priority work
 
 2) Collision handling & idempotent shorten
 - Provide idempotency: if a URL already exists in the store, return its existing code instead of creating a new one.
+--- Implemented for the file store with an atomic existing-URL check and save; other Store implementations can opt into this behavior with `store.IdempotentStore`.
 - Avoid code collisions: on generated-code collision, retry generation a bounded number of times, then fall back to a deterministic approach (e.g., base62(hash(URL))+counter).
+--- Implemented with bounded random retries and deterministic base62 code generation after repeated collisions.
 - Consider adding an index or reverse lookup in the Store to support URL->code queries efficiently.
+--- Implemented with a file-store reverse URL-to-code index used by idempotent lookups.
 
 3) Graceful shutdown, logging, config
 - Use http.Server with Shutdown(ctx) and trap signals (os/signal.Notify) for graceful shutdown.

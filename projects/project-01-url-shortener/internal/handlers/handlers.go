@@ -1,10 +1,14 @@
 package handlers
 
 import (
+	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"log"
+	"math/big"
 	"math/rand"
 	"net/http"
+	"strconv"
 	"time"
 
 	"letscode/project-01-url-shortener/internal/store"
@@ -36,6 +40,10 @@ type shortenResponse struct {
 	Code string `json:"code"`
 }
 
+type urlLookupStore interface {
+	LookupURL(url string) (string, bool)
+}
+
 func (h *Handler) shorten(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -47,12 +55,47 @@ func (h *Handler) shorten(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// validate URL: must parse, have host and https scheme
-if err := ValidateURL(req.URL); err != nil {
-    http.Error(w, err.Error(), http.StatusBadRequest)
-    return
-}
+	if err := ValidateURL(req.URL); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	code := h.generateCode(6)
-	if err := h.store.Save(code, req.URL); err != nil {
+	if s, ok := h.store.(store.IdempotentStore); ok {
+		var err error
+		for attempt := 0; attempt < maxCodeGenerationAttempts; attempt++ {
+			code, err = s.SaveOrGetCode(h.generateCode(6), req.URL)
+			if err == nil {
+				break
+			}
+			if !errors.Is(err, store.ErrCodeCollision) {
+				log.Printf("save error: %v", err)
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+		}
+		if err != nil {
+			for counter := 0; ; counter++ {
+				code, err = s.SaveOrGetCode(deterministicCode(req.URL, counter), req.URL)
+				if err == nil {
+					break
+				}
+				if !errors.Is(err, store.ErrCodeCollision) {
+					log.Printf("save error: %v", err)
+					w.WriteHeader(http.StatusInternalServerError)
+					return
+				}
+			}
+		}
+	} else if s, ok := h.store.(urlLookupStore); ok {
+		code = h.generateCode(6)
+		if existingCode, found := s.LookupURL(req.URL); found {
+			code = existingCode
+		} else if err := h.store.Save(code, req.URL); err != nil {
+			log.Printf("save error: %v", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+	} else if err := h.store.Save(code, req.URL); err != nil {
 		log.Printf("save error: %v", err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
@@ -89,6 +132,7 @@ func (h *Handler) redirect(w http.ResponseWriter, r *http.Request) {
 }
 
 const letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+const maxCodeGenerationAttempts = 5
 
 func (h *Handler) generateCode(n int) string {
 	b := make([]byte, n)
@@ -96,4 +140,22 @@ func (h *Handler) generateCode(n int) string {
 		b[i] = letters[h.rnd.Intn(len(letters))]
 	}
 	return string(b)
+}
+
+func deterministicCode(url string, counter int) string {
+	sum := sha256.Sum256([]byte(url + "#" + strconv.Itoa(counter)))
+	value := new(big.Int).SetBytes(sum[:])
+	if value.Sign() == 0 {
+		return "0"
+	}
+	var out []byte
+	for value.Sign() > 0 {
+		remainder := new(big.Int)
+		value.QuoRem(value, big.NewInt(int64(len(letters))), remainder)
+		out = append(out, letters[remainder.Int64()])
+	}
+	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+		out[i], out[j] = out[j], out[i]
+	}
+	return string(out)
 }
